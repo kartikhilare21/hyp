@@ -1,0 +1,59 @@
+service: Hypertrends-serverless
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  stage: ${opt:stage, 'dev'}
+  region: us-east-1
+  tags:
+    env: ${opt:stage, 'dev'}
+  vpc:
+    securityGroupIds:
+      - ${ssm:/sg_ec2-${self:provider.stage}}
+    subnetIds:
+      - ${ssm:/subnet-${self:provider.stage}}
+      - ${ssm:/subnet2-${self:provider.stage}}
+
+functions:
+  restrictedAccessFunction:
+    handler: src/main.handler
+    timeout: 120
+    vpc:
+      securityGroupIds:
+        - ${ssm:/sg_ec2-${self:provider.stage}}
+      subnetIds:
+        - ${ssm:/subnet-${self:provider.stage}}
+        - ${ssm:/subnet2-${self:provider.stage}}
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - 'dynamodb:GetItem'
+          - 'dynamodb:Query'
+          - 'dynamodb:Scan'
+        Resource: ${file(env.json):${self:provider.stage}.dynamodb_arn}
+      - Effect: Allow
+        Action:
+          - 'rds-data:ExecuteStatement'
+        Resource: ${file(env.json):${self:provider.stage}.rds_data_arn}
+
+resources:
+  Resources:
+    GatewayResource:
+      Type: AWS::ApiGatewayV2::Api
+      Properties:
+        Name: MyAPI
+        ProtocolType: HTTP
+        Target: !Sub 'integrations/${ApiGatewayIntegration}'
+    ApiGatewayIntegration:
+      Type: AWS::ApiGatewayV2::Integration
+      Properties:
+        IntegrationType: AWS_PROXY
+        IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations'
+        ApiId: !Ref GatewayResource
+    LambdaFunction:
+      Type: AWS::Lambda::Function
+      Properties:
+        FunctionName: ${self:service}-${self:provider.stage}
+        Handler: index.handler
+        Role: arn:aws:iam::${AWS::AccountId}:role/${self:service}-lambda-role-${self:provider.stage}
+        Runtime: nodejs18.x
